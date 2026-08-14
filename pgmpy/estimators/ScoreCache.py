@@ -1,8 +1,10 @@
 #!/usr/bin/env python
-from pgmpy.estimators import StructureScore
+import warnings
+
+from pgmpy.structure_score import BaseStructureScore
 
 
-class ScoreCache(StructureScore):
+class ScoreCache(BaseStructureScore):
     """
     A wrapper class for StructureScore instances, which implement a decomposable score,
     that caches local scores.
@@ -14,30 +16,32 @@ class ScoreCache(StructureScore):
          Has to be a decomposable score.
     data: pandas DataFrame instance
         DataFrame instance where each column represents one variable.
-        (If some values in the data are missing the data cells should be set to `numpy.NaN`.
-        Note that pandas converts each column containing `numpy.NaN`s to dtype `float`.)
+        (If some values in the data are missing the data cells should be set to `numpy.nan`.
+        Note that pandas converts each column containing `numpy.nan`s to dtype `float`.)
     max_size: int (optional, default 10_000)
         The maximum number of elements allowed in the cache. When the limit is reached, the least recently used
         entries will be discarded.
     **kwargs
         Additional arguments that will be handed to the super constructor.
 
-    Reference
-    ---------
-    Koller & Friedman, Probabilistic Graphical Models - Principles and Techniques, 2009
-    Section 18.3
+    References
+    ----------
+    - :footcite:t:`koller_friedman_2009` (Section 18.3).
     """
 
     def __init__(self, base_scorer, data, max_size=10000, **kwargs):
-        assert isinstance(
-            base_scorer, StructureScore
-        ), "Base scorer has to be of type StructureScore."
+        warnings.warn(
+            "`pgmpy.estimators.ScoreCache` is deprecated and will be removed in v2.0. "
+            "Structure scores in `pgmpy.structure_score` cache local scores internally; "
+            "use their `max_cache_size` parameter instead.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        assert isinstance(base_scorer, BaseStructureScore), "Base scorer has to be of type StructureScore."
 
         self.base_scorer = base_scorer
-        self.cache = LRUCache(
-            original_function=self._wrapped_original, max_size=int(max_size)
-        )
-        super(ScoreCache, self).__init__(data, **kwargs)
+        self.cache = LRUCache(original_function=self._wrapped_original, max_size=int(max_size))
+        super().__init__(data, **kwargs)
 
     def local_score(self, variable, parents):
         hashable = tuple(parents)

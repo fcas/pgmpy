@@ -1,123 +1,140 @@
-.. pgmpy documentation master file, created by
-   sphinx-quickstart on Tue Aug 30 18:17:42 2016.
-   You can adapt this file completely to your liking, but it should at least
-   contain the root `toctree` directive.
+.. pgmpy documentation master file
 
-.. |br| raw:: html
+.. title:: Documentation — pgmpy
 
-   <br />
+:hide-toc:
+:hide-navigation:
 
-.. image:: https://github.com/pgmpy/pgmpy/actions/workflows/ci.yml/badge.svg?branch=dev
-   :target: https://github.com/pgmpy/pgmpy/actions?query=branch%3Adev
+.. meta::
+   :description: pgmpy documentation for causal discovery, model testing, causal effect estimation, parameter estimation, probabilistic and causal inference, and simulations in Python.
 
-.. image:: https://codecov.io/gh/pgmpy/pgmpy/branch/dev/graph/badge.svg
-   :target: https://codecov.io/gh/pgmpy/pgmpy
+.. grid:: 1 1 2 2
+   :gutter: 3
+   :class-container: hero-grid
 
-.. image:: https://api.codacy.com/project/badge/Grade/78a8256c90654c6892627f6d8bbcea14
-   :target: https://www.codacy.com/gh/pgmpy/pgmpy?utm_source=github.com&amp;utm_medium=referral&amp;utm_content=pgmpy/pgmpy&amp;utm_campaign=Badge_Grade
+   .. grid-item::
+      :class: hero-logo-panel
 
-.. image:: https://img.shields.io/pypi/dm/pgmpy.svg
-   :target: https://pypistats.org/packages/pgmpy
+      .. image:: _static/images/logo.png
+         :alt: pgmpy logo
+         :width: 220px
+         :align: center
 
-.. image:: https://badges.gitter.im/Join%20Chat.svg
-   :target: https://gitter.im/pgmpy/pgmpy?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge
+   .. grid-item::
+      :class: hero-copy-panel
+
+      .. container:: hero-subtitle
+
+         Python toolkit for causal and probabilistic reasoning
+
+      pgmpy is a Python library for causal and probabilistic reasoning with graphical models. It covers the full workflow from learning causal graphs from data to estimating causal effects, running probabilistic inference, and simulating data from fitted models. All algorithms follow a unified, composable API and are scikit-learn compatible where possible, so they work standalone, in sklearn pipelines, or as building blocks for higher-level tools.
+
+
+      .. container:: hero-actions
+
+         .. button-ref:: started/index
+            :ref-type: doc
+            :color: primary
+            :outline:
+            :class: hero-action-button
+
+            Getting Started
+
+         .. button-ref:: documentation
+            :ref-type: doc
+            :color: primary
+            :outline:
+            :class: hero-action-button
+
+            User Guide
+
+         .. button-ref:: examples
+            :ref-type: doc
+            :color: primary
+            :outline:
+            :class: hero-action-button
+
+            Example Notebooks
+
+         .. button-ref:: reference
+            :ref-type: doc
+            :color: primary
+            :outline:
+            :class: hero-action-button
+
+            API Reference
+
+Key Features
+------------
+
+.. grid:: 1 1 2 4
+   :gutter: 3
+   :class-container: pgmpy-card-grid
+
+   .. grid-item-card:: Causal Discovery / Structure Learning
+      :link: quickstart-causal-discovery
+      :link-type: ref
+      :class-card: sd-card-hover
+
+      Learn causal graphs from data using scikit-learn compatible implementations.
+
+   .. grid-item-card:: Parameter Estimation
+      :link: quickstart-parameter-estimation
+      :link-type: ref
+      :class-card: sd-card-hover
+
+      Estimate conditional distributions for nodes in the model.
+
+   .. grid-item-card:: Probabilistic Inference
+      :link: quickstart-probabilistic-inference
+      :link-type: ref
+      :class-card: sd-card-hover
+
+      Compute posterior distributions from the learned model using exact or approximate inference.
+
+   .. grid-item-card:: Causal Identification
+      :link: quickstart-causal-identification
+      :link-type: ref
+      :class-card: sd-card-hover
+
+      Given a causal graph determine how to estimate the a causal query.
+
+   .. grid-item-card:: Causal Inference
+      :link: quickstart-causal-inference
+      :link-type: ref
+      :class-card: sd-card-hover
+
+      Compute interventional and counterfactual distributions from models.
+
+   .. grid-item-card:: Example Datasets and Models
+      :link: quickstart-example-data-models
+      :link-type: ref
+      :class-card: sd-card-hover
+
+      Built-in collection of example Bayesian Networks and datasets from different sources.
+
+   .. grid-item-card:: Simulations
+      :link: quickstart-simulations
+      :link-type: ref
+      :class-card: sd-card-hover
+
+      Simulate data from models under various scenarios.
+
+   .. grid-item-card:: Extend pgmpy
+      :link: quickstart-extensibility
+      :link-type: ref
+      :class-card: sd-card-hover
+
+      Write your own custom pgmpy plugable methods using our extension templates.
 
 
 .. toctree::
-   :maxdepth: 2
    :hidden:
 
-   started/base.rst
-   base/base.rst
-   models/base.rst
-   factors/base.rst
-   exact_infer/base.rst
-   exact_infer/model_testing.rst
-   approx_infer/base.rst
-   param_estimator/base.rst
-   structure_estimator/base.rst
-   metrics/metrics.rst
-   readwrite/base.rst
-   examples.rst
-   tutorial.rst
-
-pgmpy is a pure python implementation for Bayesian Networks with a focus on
-modularity and extensibility. Implementations of various alogrithms for Structure
-Learning, Parameter Estimation, Approximate (Sampling Based) and Exact
-inference, and Causal Inference are available.
-
-Supported Data Types
-====================
-
-.. list-table::
-   :header-rows: 1
-
-   * -
-     - Structure Learning
-     - Parameter Estimation
-     - Causal Inference
-     - Probabilistic Inference
-   * - **Discrete**
-     - Yes
-     - Yes
-     - Yes
-     - Yes
-   * - **Continuous**
-     - Yes (only PC)
-     - No
-     - Yes (partial)
-     - No
-   * - **Hybrid**
-     - No
-     - No
-     - No
-     - No
-   * - **Time Series**
-     - No
-     - Yes
-     - Yes (ApproximateInference)
-     - Yes
-
-Algorithms
-==========
-
-.. csv-table::
-   :file: algorithms.csv
-   :header-rows: 1
-
-
-Example notebooks are also available at: https://github.com/pgmpy/pgmpy/tree/dev/examples
-
-Tutorial notebooks are also available at: https://github.com/pgmpy/pgmpy_notebook
-
-Citation
-========
-If you use pgmpy in your scientific work, please consider citing us:
-
-.. code-block:: text
-
-   Ankan, Ankur, Abinash, Panda. "pgmpy: Probabilistic Graphical Models using Python." Proceedings of the Python in Science Conference. SciPy, 2015.
-
-Bibtex:
-
-.. code-block:: text
-
-   @inproceedings{Ankan2015,
-     series = {SciPy},
-     title = {pgmpy: Probabilistic Graphical Models using Python},
-     ISSN = {2575-9752},
-     url = {http://dx.doi.org/10.25080/Majora-7b98e3ed-001},
-     DOI = {10.25080/majora-7b98e3ed-001},
-     booktitle = {Proceedings of the Python in Science Conference},
-     publisher = {SciPy},
-     author = {Ankan,  Ankur and Panda,  Abinash},
-     year = {2015},
-     collection = {SciPy}
-   }
-
-Indices and tables
-==================
-
-* :ref:`genindex`
-* :ref:`modindex`
-* :ref:`search`
+   Getting Started <started/index>
+   User Guide <documentation>
+   Examples <examples>
+   API Reference <reference>
+   Citation <citation>
+   Getting Involved <development>
+   References <references>

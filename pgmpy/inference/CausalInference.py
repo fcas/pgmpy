@@ -1,62 +1,94 @@
+import warnings
 from collections.abc import Iterable
-from itertools import chain, product
+from itertools import chain, pairwise, product
 
 import networkx as nx
 import numpy as np
+from networkx.algorithms.dag import descendants
 from tqdm.auto import tqdm
 
-from pgmpy import config
+from pgmpy import config, logger
+from pgmpy.base import DAG
 from pgmpy.estimators.LinearModel import LinearEstimator
 from pgmpy.factors.discrete import DiscreteFactor
-from pgmpy.models import BayesianNetwork
+from pgmpy.models import (
+    DiscreteBayesianNetwork,
+    FunctionalBayesianNetwork,
+    LinearGaussianBayesianNetwork,
+    SEMGraph,
+)
 from pgmpy.utils.sets import _powerset, _variable_or_iterable_to_set
 
 
-class CausalInference(object):
+class CausalInference:
     """
     This is an inference class for performing Causal Inference over Bayesian
     Networks or Structural Equation Models.
 
     Parameters
     ----------
-    model: pgmpy.base.DAG | pgmpy.models.BayesianNetwork
+    model: pgmpy.base.DAG | pgmpy.models.DiscreteBayesianNetwork | pgmpy.models.SEMGraph
         The model that we'll perform inference over.
-
-    set_nodes: list[node:str] or None
-        A list (or set/tuple) of nodes in the Bayesian Network which have been
-        set to a specific value per the do-operator.
 
     Examples
     --------
     Create a small Bayesian Network.
 
-    >>> from pgmpy.models import BayesianNetwork
-    >>> game = BayesianNetwork([('X', 'A'),
-    ...                         ('A', 'Y'),
-    ...                         ('A', 'B')])
+    >>> from pgmpy.models import DiscreteBayesianNetwork
+    >>> game = DiscreteBayesianNetwork([("X", "A"), ("A", "Y"), ("A", "B")])
 
     Load the graph into the CausalInference object to make causal queries.
 
     >>> from pgmpy.inference.CausalInference import CausalInference
     >>> inference = CausalInference(game)
     >>> inference.get_all_backdoor_adjustment_sets(X="X", Y="Y")
+    frozenset()
     >>> inference.get_all_frontdoor_adjustment_sets(X="X", Y="Y")
+    frozenset({frozenset({'A'})})
 
     References
     ----------
-    'Causality: Models, Reasoning, and Inference' - Judea Pearl (2000)
+    - :footcite:t:`pearl_2009`
     """
 
-    def __init__(self, model, set_nodes=None):
-        if not isinstance(model, BayesianNetwork):
+    def __init__(self, model):
+        if not isinstance(
+            model,
+            (
+                DiscreteBayesianNetwork,
+                LinearGaussianBayesianNetwork,
+                FunctionalBayesianNetwork,
+                SEMGraph,
+                DAG,
+            ),
+        ):
+            raise NotImplementedError("Causal Inference is only implemented for DAGs, BayesianNetworks, and SEMGraphs.")
+
+        # Check if the variable names are strings. If not, raise an error.
+        bad_variable = model._variable_name_contains_non_string()
+        if bad_variable != False:
             raise NotImplementedError(
-                "Causal Inference is only implemented for BayesianNetworks at this time."
+                f"Causal Inference is only implemented for a model with "
+                "variable names with string type. "
+                f"Found {bad_variable[0]} with type {bad_variable[1]}. "
+                "Convert them to string to proceed."
             )
+
+        # Initialize data structures.
         self.model = model
-        self.set_nodes = _variable_or_iterable_to_set(set_nodes)
-        self.observed_variables = frozenset(self.model.nodes()).difference(
-            model.latents
-        )
+
+        if isinstance(model, SEMGraph):
+            self.observed_variables = frozenset(model.observed)
+            self.latent_variables = model.latents
+            self.dag = DAG(
+                model.full_graph_struct,
+                latents=model.latents.union({var for var in model.full_graph_struct.nodes() if var.startswith(".")}),
+            )
+
+        elif isinstance(model, (DiscreteBayesianNetwork, DAG)):
+            self.observed_variables = frozenset(model.nodes()).difference(model.latents)
+            self.latent_variables = model.latents
+            self.dag = DAG(model.to_directed(), latents=model.latents)
 
     def __repr__(self):
         variables = ", ".join(map(str, sorted(self.observed_variables)))
@@ -85,26 +117,32 @@ class CausalInference(object):
 
         Examples
         --------
-        >>> game1 = BayesianNetwork([('X', 'A'),
-        ...                          ('A', 'Y'),
-        ...                          ('A', 'B')])
+        >>> game1 = DiscreteBayesianNetwork([("X", "A"), ("A", "Y"), ("A", "B")])
         >>> inference = CausalInference(game1)
         >>> inference.is_valid_backdoor_adjustment_set("X", "Y")
         True
         """
+        warnings.warn(
+            """`is_valid_backdoor_adjustment_set` is deprecated and will be removed in v2.0. Please use
+            pgmpy.identification.Adjustment instead.""",
+            FutureWarning,
+            stacklevel=2,
+        )
+
         Z_ = _variable_or_iterable_to_set(Z)
 
         observed = [X] + list(Z_)
         parents_d_sep = []
-        for p in self.model.predecessors(X):
-            parents_d_sep.append(not self.model.is_dconnected(p, Y, observed=observed))
+        for p in self.dag.predecessors(X):
+            parents_d_sep.append(not self.dag.is_dconnected(p, Y, observed=observed))
         return all(parents_d_sep)
 
     def get_all_backdoor_adjustment_sets(self, X, Y):
         """
         Returns a list of all adjustment sets per the back-door criterion.
 
-        A set of variables Z satisfies the back-door criterion relative to an ordered pair of variabies (Xi, Xj) in a DAG G if:
+        A set of variables Z satisfies the back-door criterion relative
+          to an ordered pair of variabies (Xi, Xj) in a DAG G if:
             (i) no node in Z is a descendant of Xi; and
             (ii) Z blocks every path between Xi and Xj that contains an arrow into Xi.
 
@@ -125,13 +163,18 @@ class CausalInference(object):
 
         Examples
         --------
-        >>> game1 = BayesianNetwork([('X', 'A'),
-        ...                          ('A', 'Y'),
-        ...                          ('A', 'B')])
+        >>> game1 = DiscreteBayesianNetwork([("X", "A"), ("A", "Y"), ("A", "B")])
         >>> inference = CausalInference(game1)
         >>> inference.get_all_backdoor_adjustment_sets("X", "Y")
         frozenset()
         """
+        warnings.warn(
+            """`get_all_backdoor_adjustment_sets` is deprecated and will be removed in v2.0. Please use
+            pgmpy.identification.Adjustment instead.""",
+            FutureWarning,
+            stacklevel=2,
+        )
+
         try:
             assert X in self.observed_variables
             assert Y in self.observed_variables
@@ -141,12 +184,7 @@ class CausalInference(object):
         if self.is_valid_backdoor_adjustment_set(X, Y, Z=frozenset()):
             return frozenset()
 
-        possible_adjustment_variables = (
-            set(self.observed_variables)
-            - {X}
-            - {Y}
-            - set(nx.descendants(self.model, X))
-        )
+        possible_adjustment_variables = set(self.observed_variables) - {X} - {Y} - set(nx.descendants(self.dag, X))
 
         valid_adjustment_sets = []
         for s in _powerset(possible_adjustment_variables):
@@ -184,26 +222,28 @@ class CausalInference(object):
         Is valid frontdoor adjustment: bool
             True if Z is a valid frontdoor adjustment set.
         """
+        warnings.warn(
+            """`is_valid_frontdoor_adjustment_set` is deprecated and will be removed in v2.0. Please use
+            pgmpy.identification.Frontdoor instead.""",
+            FutureWarning,
+            stacklevel=2,
+        )
         Z = _variable_or_iterable_to_set(Z)
 
         # 0. Get all directed paths from X to Y.  Don't check further if there aren't any.
-        directed_paths = list(nx.all_simple_paths(self.model, X, Y))
+        directed_paths = list(nx.all_simple_paths(self.dag, X, Y))
 
         if directed_paths == []:
             return False
 
         # 1. Z intercepts all directed paths from X to Y
-        unblocked_directed_paths = [
-            path for path in directed_paths if not any(zz in path for zz in Z)
-        ]
+        unblocked_directed_paths = [path for path in directed_paths if not any(zz in path for zz in Z)]
 
         if unblocked_directed_paths:
             return False
 
         # 2. there is no backdoor path from X to Z
-        unblocked_backdoor_paths_X_Z = [
-            zz for zz in Z if not self.is_valid_backdoor_adjustment_set(X, zz)
-        ]
+        unblocked_backdoor_paths_X_Z = [zz for zz in Z if not self.is_valid_backdoor_adjustment_set(X, zz)]
 
         if unblocked_backdoor_paths_X_Z:
             return False
@@ -238,6 +278,12 @@ class CausalInference(object):
         -------
         frozenset: a frozenset of frozensets
         """
+        warnings.warn(
+            """`get_all_frontdoor_adjustment_sets` is deprecated and will be removed in v2.0. Please use
+            pgmpy.identification.Frontdoor instead.""",
+            FutureWarning,
+            stacklevel=2,
+        )
         assert X in self.observed_variables
         assert Y in self.observed_variables
 
@@ -252,6 +298,370 @@ class CausalInference(object):
         )
 
         return valid_adjustment_sets
+
+    def get_scaling_indicators(self):
+        """
+        Returns a scaling indicator for each of the latent variables in the model.
+        The scaling indicator is chosen randomly among the observed measurement
+        variables of the latent variable.
+
+        Examples
+        --------
+        >>> from pgmpy.models import SEMGraph
+        >>> model = SEMGraph(
+        ...     ebunch=[
+        ...         ("xi1", "eta1"),
+        ...         ("xi1", "x1"),
+        ...         ("xi1", "x2"),
+        ...         ("eta1", "y1"),
+        ...         ("eta1", "y2"),
+        ...     ],
+        ...     latents=["xi1", "eta1"],
+        ... )
+        >>> sorted(model.get_scaling_indicators().items())
+        [('eta1', 'y1'), ('xi1', 'x1')]
+
+        Returns
+        -------
+        dict: Returns a dict with latent variables as the key and their value being the
+                scaling indicator.
+        """
+        scaling_indicators = {}
+        for node in self.latent_variables:
+            for neighbor in self.dag.neighbors(node):
+                if neighbor in self.observed_variables:
+                    scaling_indicators[node] = neighbor
+                    break
+        return scaling_indicators
+
+    def _iv_transformations(self, X, Y, scaling_indicators={}):
+        """
+        Transforms the graph structure of SEM so that the d-separation criterion is
+        applicable for finding IVs. The method transforms the graph for finding MIIV
+        for the estimation of X \rightarrow Y given the scaling indicator for all the
+        parent latent variables.
+
+        Parameters
+        ----------
+        X: node
+            The explanatory variable.
+
+        Y: node
+            The dependent variable.
+
+        scaling_indicators: dict
+            Scaling indicator for each latent variable in the model.
+
+        Returns
+        -------
+        nx.DiGraph: The transformed full graph structure.
+
+        Examples
+        --------
+        >>> from pgmpy.models import SEMGraph
+        >>> model = SEMGraph(
+        ...     ebunch=[
+        ...         ("xi1", "eta1"),
+        ...         ("xi1", "x1"),
+        ...         ("xi1", "x2"),
+        ...         ("eta1", "y1"),
+        ...         ("eta1", "y2"),
+        ...     ],
+        ...     latents=["xi1", "eta1"],
+        ... )
+        >>> inference = CausalInference(model)
+        >>> inference._iv_transformations(
+        ...     "xi1", "eta1", scaling_indicators={"xi1": "x1", "eta1": "y1"}
+        ... ) # doctest: +ELLIPSIS
+        (<pgmpy.base.DAG.DAG object at 0x...>, 'y1')
+        """
+        full_graph = self.dag.copy()
+
+        if (X, Y) not in full_graph.edges():
+            raise ValueError(f"The edge from {X} -> {Y} doesn't exist in the graph")
+
+        if (X in self.observed_variables) and (Y in self.observed_variables):
+            full_graph.remove_edge(X, Y)
+            return full_graph, Y
+
+        elif Y in self.latent_variables:
+            full_graph.add_edge("." + Y, scaling_indicators[Y])
+            dependent_var = scaling_indicators[Y]
+        else:
+            dependent_var = Y
+
+        # This check is to not remove edges from error terms to the variable. Specifically for SEMs.
+        variable_parents = [var for var in self.dag.predecessors(Y) if not var.startswith(".")]
+
+        for parent_y in variable_parents:
+            full_graph.remove_edge(parent_y, Y)
+            if parent_y in self.latent_variables:
+                full_graph.add_edge("." + scaling_indicators[parent_y], dependent_var)
+
+        return full_graph, dependent_var
+
+    def get_ivs(self, X, Y, scaling_indicators={}):
+        """
+        Returns the Instrumental variables(IVs) for the relation X -> Y
+
+        Parameters
+        ----------
+        X: node
+            The variable name (observed or latent)
+
+        Y: node
+            The variable name (observed or latent)
+
+        scaling_indicators: dict (optional)
+            A dict representing which observed variable to use as scaling indicator for
+            the latent variables.
+            If not given the method automatically selects one of the measurement variables
+            at random as the scaling indicator.
+
+        Returns
+        -------
+        set: {str}
+            The set of Instrumental Variables for X -> Y.
+
+        Examples
+        --------
+        >>> from pgmpy.models import SEMGraph
+        >>> model = SEMGraph(
+        ...     ebunch=[("I", "X"), ("X", "Y")], latents=[], err_corr=[("X", "Y")]
+        ... )
+        >>> inference = CausalInference(model)
+        >>> inference.get_ivs("X", "Y")
+        {'I'}
+        """
+        if not scaling_indicators:
+            scaling_indicators = self.get_scaling_indicators()
+
+        if (X in scaling_indicators.keys()) and (scaling_indicators[X] == Y):
+            logger.warning(f"{Y} is the scaling indicator of {X}. Please specify `scaling_indicators`")
+
+        transformed_graph, dependent_var = self._iv_transformations(X, Y, scaling_indicators=scaling_indicators)
+
+        if X in self.latent_variables:
+            explanatory_var = scaling_indicators[X]
+        else:
+            explanatory_var = X
+
+        d_connected_x = transformed_graph.active_trail_nodes([explanatory_var])[explanatory_var]
+
+        # Compute the d-connected nodes to Y except any variable connected through X.
+        transformed_graph_copy = transformed_graph.copy()
+        transformed_graph_copy.remove_edges_from(list(transformed_graph_copy.in_edges(explanatory_var)))
+        d_connected_y = transformed_graph_copy.active_trail_nodes([dependent_var])[dependent_var]
+
+        # Remove {X, Y} because they can't be IV for X -> Y
+        return d_connected_x - d_connected_y - {dependent_var, explanatory_var}
+
+    def get_conditional_ivs(self, X, Y, scaling_indicators={}):
+        """
+        Returns the conditional IVs for the relation X -> Y
+
+        Parameters
+        ----------
+        X: node
+            The observed variable's name
+
+        Y: node
+            The observed variable's name
+
+        scaling_indicators: dict (optional)
+            A dict representing which observed variable to use as scaling indicator for
+            the latent variables.
+            If not provided, automatically finds scaling indicators by randomly selecting
+            one of the measurement variables of each latent variable.
+
+        Returns
+        -------
+        set: Set of 2-tuples representing tuple[0] is an IV for X -> Y given tuple[1].
+
+        References
+        ----------
+        - :footcite:t:`vanderzander_2015`
+
+        Examples
+        --------
+        >>> from pgmpy.models import SEMGraph
+        >>> model = SEMGraph(
+        ...     ebunch=[("I", "X"), ("X", "Y"), ("W", "I")],
+        ...     latents=[],
+        ...     err_corr=[("W", "Y")],
+        ... )
+        >>> inference = CausalInference(model)
+        >>> inference.get_conditional_ivs("X", "Y")
+        [('I', {'W'})]
+        """
+        if not scaling_indicators:
+            scaling_indicators = self.get_scaling_indicators()
+
+        if (X in scaling_indicators.keys()) and (scaling_indicators[X] == Y):
+            logger.warning(f"{Y} is the scaling indicator of {X}. Please specify `scaling_indicators`")
+
+        transformed_graph, dependent_var = self._iv_transformations(X, Y, scaling_indicators=scaling_indicators)
+        if (X, Y) in transformed_graph.edges:
+            transformed_graph.remove_edge(X, Y)
+        G_c = transformed_graph
+
+        instruments = []
+        for Z in self.observed_variables - {X, Y}:
+            W = self._nearest_separator(G_c, Y, Z)
+            # Condition to check if W d-separates Y from Z
+            if (not W) or (W.intersection(descendants(G_c, Y))) or (X in W):
+                continue
+
+            # Condition to check if X d-connected to I after conditioning on W.
+            elif X in self.model.active_trail_nodes([Z], observed=W)[Z]:
+                instruments.append((Z, W))
+            else:
+                continue
+        return instruments
+
+    def get_total_conditional_ivs(self, X, Y, scaling_indicators={}):
+        all_paths = list(nx.all_simple_paths(self.dag, X, Y))
+        nodes_on_paths = {node for path in all_paths for node in path}
+        nodes_on_paths = nodes_on_paths - {X, Y}
+
+        transformed_graph, dependent_var = self._iv_transformations(X, Y, scaling_indicators=scaling_indicators)
+
+        if (X, Y) in transformed_graph.edges():
+            transformed_graph.remove_edge(X, Y)
+
+        instruments = []
+        for Z in self.observed_variables - {X, Y}:
+            W = self._nearest_separator(transformed_graph, Y, Z)
+
+            # Check if W contains any nodes on paths from X to Y
+            if W and W.intersection(nodes_on_paths):
+                # Skip this instrument if it requires conditioning on nodes in paths
+                continue
+
+            # Regular conditions from get_conditional_ivs
+            if (not W) or (W.intersection(descendants(transformed_graph, Y))) or (X in W):
+                continue
+            elif X in self.model.active_trail_nodes([Z], observed=W)[Z]:
+                instruments.append((Z, W))
+            else:
+                continue
+
+        return instruments
+
+    def identification_method(self, X, Y):
+        """
+        Automatically identifies a valid method for estimating the causal effect from X to Y.
+
+        Parameters
+        ----------
+        X: str
+            The treatment/exposure variable
+        Y: str
+            The outcome variable
+
+        Returns
+        -------
+        dict
+            A dictionary containing keys as method and value as the corresponding result.
+        """
+        result = {}
+
+        try:
+            backdoor_sets = self.get_all_backdoor_adjustment_sets(X, Y)
+            if len(backdoor_sets) > 0:
+                result["backdoor set"] = backdoor_sets
+        except ValueError:
+            pass
+
+        try:
+            frontdoor_sets = self.get_all_frontdoor_adjustment_sets(X, Y)
+            if len(frontdoor_sets) > 0:
+                result["frontdoor set"] = frontdoor_sets
+        except ValueError:
+            pass
+
+        try:
+            instruments = self.get_ivs(X, Y)
+            if len(instruments) > 0:
+                result["instrumental variables"] = instruments
+        except ValueError:
+            pass
+
+        try:
+            conditional_ivs = self.get_conditional_ivs(X, Y)
+            if len(conditional_ivs) > 0:
+                result["conditional instrumental variables"] = conditional_ivs
+        except ValueError:
+            pass
+
+        try:
+            total_conditional_ivs = self.get_total_conditional_ivs(X, Y)
+            if len(total_conditional_ivs) > 0:
+                result["total conditional instrumental variables"] = total_conditional_ivs
+        except ValueError:
+            pass
+
+        return result
+
+    def _nearest_separator(self, G, Y, Z):
+        """
+        Finds the set of the nearest separators for `Y` and `Z` in `G`.
+
+        Parameters
+        ----------
+        G: nx.DiGraph instance
+            The graph in which to the find the nearest separation for `Y` and `Z`.
+
+        Y: str
+            The variable name for which the separators are needed.
+
+        Z: str
+            The other variable for which the separators are needed.
+
+        Returns
+        -------
+        set or None: If there is a nearest separator returns the set of separators else returns None.
+        """
+        W = set()
+        ancestral_G = G.subgraph(nx.ancestors(G, Y).union(nx.ancestors(G, Z)).union({Y, Z})).copy()
+
+        if isinstance(self.model, SEMGraph):
+            # Optimization: Remove all error nodes which don't have
+            #  any correlation as it doesn't add any new path.
+            #  If not removed it can create a lot of
+            # extra paths resulting in a much higher runtime.
+            err_nodes_to_remove = set(self.model.err_graph.nodes()) - {
+                node for edge in self.model.err_graph.edges() for node in edge
+            }
+            ancestral_G.remove_nodes_from(["." + node for node in err_nodes_to_remove])
+
+        M = ancestral_G.moralize()
+        visited = {Y}
+        to_visit = list(M.neighbors(Y))
+
+        # Another optimization over the original algo. Rather than going through all the paths does
+        # a DFS search to find a markov blanket of observed variables. This doesn't ensure minimal observed
+        # set.
+        while to_visit:
+            node = to_visit.pop()
+            if node == Z:
+                return None
+            visited.add(node)
+            if node in self.observed_variables:
+                W.add(node)
+            else:
+                to_visit.extend([node for node in M.neighbors(node) if node not in visited])
+        # for path in nx.all_simple_paths(M, Y, Z):
+        #     path_set = set(path)
+        #     if (len(path) >= 3) and not (W & path_set):
+        #         for index in range(1, len(path)-1):
+        #             if path[index] in self.observed:
+        #                 W.add(path[index])
+        #                 break
+        if Y not in G.active_trail_nodes([Z], observed=W)[Z]:
+            return W
+        else:
+            return None
 
     def _simple_decision(self, adjustment_sets=[]):
         """
@@ -323,44 +733,37 @@ class CausalInference(object):
         Examples
         --------
         >>> import pandas as pd
-        >>> game1 = BayesianNetwork([('X', 'A'),
-        ...                          ('A', 'Y'),
-        ...                          ('A', 'B')])
-        >>> data = pd.DataFrame(np.random.randint(2, size=(1000, 4)), columns=['X', 'A', 'B', 'Y'])
+        >>> import numpy as np
+        >>> rng = np.random.default_rng(42)
+        >>> game1 = DiscreteBayesianNetwork([("X", "A"), ("A", "Y"), ("A", "B")])
+        >>> data = pd.DataFrame(
+        ...     rng.random(size=(1000, 4)), columns=["X", "A", "B", "Y"]
+        ... )
         >>> inference = CausalInference(model=game1)
-        >>> inference.estimate_ate("X", "Y", data=data, estimator_type="linear")
+        >>> float(round(inference.estimate_ate("X", "Y", data=data, estimator_type="linear"), 15))
+        0.001138244615115
+
         """
         valid_estimators = ["linear"]
-        try:
-            assert estimator_type in valid_estimators
-        except AssertionError:
-            print(
-                f"{estimator_type} if not a valid estimator_type.  Please select from {valid_estimators}"
-            )
+        if estimator_type not in valid_estimators:
+            raise ValueError(f"{estimator_type} is not a valid estimator_type. Please select from {valid_estimators}")
         all_simple_paths = nx.all_simple_paths(self.model, X, Y)
         all_path_effects = []
         for path in all_simple_paths:
             causal_effect = []
-            for x1, x2 in zip(path, path[1:]):
+            for x1, x2 in pairwise(path):
                 if isinstance(estimand_strategy, frozenset):
                     adjustment_set = frozenset({estimand_strategy})
-                    assert self.is_valid_backdoor_adjustment_set(
-                        x1, x2, Z=adjustment_set
-                    )
+                    assert self.is_valid_backdoor_adjustment_set(x1, x2, Z=adjustment_set)
                 elif estimand_strategy in ["smallest", "all"]:
                     adjustment_sets = self.get_all_backdoor_adjustment_sets(x1, x2)
                     if estimand_strategy == "smallest":
-                        adjustment_sets = frozenset(
-                            {self._simple_decision(adjustment_sets)}
-                        )
+                        adjustment_sets = frozenset({self._simple_decision(adjustment_sets)})
 
                 if estimator_type == "linear":
                     self.estimator = LinearEstimator(self.model)
 
-                ate = [
-                    self.estimator.fit(X=x1, Y=x2, Z=s, data=data, **kwargs)._get_ate()
-                    for s in adjustment_sets
-                ]
+                ate = [self.estimator.fit(X=x1, Y=x2, Z=s, data=data, **kwargs)._get_ate() for s in adjustment_sets]
                 causal_effect.append(np.mean(ate))
             all_path_effects.append(np.prod(causal_effect))
         return np.sum(all_path_effects)
@@ -385,23 +788,29 @@ class CausalInference(object):
 
         Examples
         --------
-        >>> from pgmpy.models import BayesianNetwork
+        >>> from pgmpy.models import DiscreteBayesianNetwork
         >>> from pgmpy.inference import CausalInference
-        >>> model = BayesianNetwork([("x1", "y1"), ("x1", "z1"), ("z1", "z2"),
-        ...                        ("z2", "x2"), ("y2", "z2")])
+        >>> model = DiscreteBayesianNetwork(
+        ...     [("x1", "y1"), ("x1", "z1"), ("z1", "z2"), ("z2", "x2"), ("y2", "z2")]
+        ... )
         >>> c_infer = CausalInference(model)
-        >>> c_infer.get_proper_backdoor_graph(X=["x1", "x2"], Y=["y1", "y2"])
-        <pgmpy.models.BayesianNetwork.BayesianNetwork at 0x7fba501ad940>
+        >>> c_infer.get_proper_backdoor_graph(X=["x1", "x2"], Y=["y1", "y2"]) # doctest: +ELLIPSIS
+        <pgmpy.base.DAG.DAG object at 0x...>
 
         References
         ----------
-        [1] Perkovic, Emilija, et al. "Complete graphical characterization and construction of adjustment sets in Markov equivalence classes of ancestral graphs." The Journal of Machine Learning Research 18.1 (2017): 8132-8193.
+        - :footcite:t:`perkovic_2018`
         """
+        if isinstance(X, str):
+            X = [X]
+        if isinstance(Y, str):
+            Y = [Y]
+
         for var in chain(X, Y):
-            if var not in self.model.nodes():
+            if var not in self.dag.nodes():
                 raise ValueError(f"{var} not found in the model.")
 
-        model = self.model if inplace else self.model.copy()
+        model = self.dag if inplace else self.dag.copy()
         edges_to_remove = []
         for source in X:
             paths = nx.all_simple_edge_paths(model, source, Y)
@@ -435,18 +844,26 @@ class CausalInference(object):
 
         Examples
         --------
-        >>> from pgmpy.models import BayesianNetwork
+        >>> from pgmpy.models import DiscreteBayesianNetwork
         >>> from pgmpy.inference import CausalInference
-        >>> model = BayesianNetwork([("x1", "y1"), ("x1", "z1"), ("z1", "z2"),
-        ...                        ("z2", "x2"), ("y2", "z2")])
+        >>> model = DiscreteBayesianNetwork(
+        ...     [("x1", "y1"), ("x1", "z1"), ("z1", "z2"), ("z2", "x2"), ("y2", "z2")]
+        ... )
         >>> c_infer = CausalInference(model)
-        >>> c_infer.is_valid_adjustment_set(X=['x1', 'x2'], Y=['y1', 'y2'], adjustment_set=['z1', 'z2'])
+        >>> c_infer.is_valid_adjustment_set(
+        ...     X=["x1", "x2"], Y=["y1", "y2"], adjustment_set=["z1", "z2"]
+        ... )
         True
 
         References
         ----------
-        [1] Perkovic, Emilija, et al. "Complete graphical characterization and construction of adjustment sets in Markov equivalence classes of ancestral graphs." The Journal of Machine Learning Research 18.1 (2017): 8132-8193.
+        - :footcite:t:`perkovic_2018`
         """
+        if isinstance(X, str):
+            X = [X]
+        if isinstance(Y, str):
+            Y = [Y]
+
         backdoor_graph = self.get_proper_backdoor_graph(X, Y, inplace=False)
         for x, y in zip(X, Y):
             if backdoor_graph.is_dconnected(start=x, end=y, observed=adjustment_set):
@@ -455,7 +872,7 @@ class CausalInference(object):
 
     def get_minimal_adjustment_set(self, X, Y):
         """
-        Method to test whether `adjustment_set` is a valid adjustment set for
+        Returns a minimal adjustment set for
         identifying the causal effect of `X` on `Y`.
 
         Parameters
@@ -474,16 +891,16 @@ class CausalInference(object):
 
         Examples
         --------
-        >>> from pgmpy.models import BayesianNetwork
+        >>> from pgmpy.models import DiscreteBayesianNetwork
         >>> from pgmpy.inference import CausalInference
-        >>> dag = BayesianNetwork([("X_1", "X_2"), ("Z", "X_1"), ("Z", "X_2")])
+        >>> dag = DiscreteBayesianNetwork([("X_1", "X_2"), ("Z", "X_1"), ("Z", "X_2")])
         >>> infer = CausalInference(dag)
         >>> infer.get_minimal_adjustment_set("X_1", "X_2")
         {'Z'}
 
         References
         ----------
-        [1] Perkovic, Emilija, et al. "Complete graphical characterization and construction of adjustment sets in Markov equivalence classes of ancestral graphs." The Journal of Machine Learning Research 18.1 (2017): 8132-8193.
+        - :footcite:t:`perkovic_2018`
         """
         backdoor_graph = self.get_proper_backdoor_graph([X], [Y], inplace=False)
         return backdoor_graph.minimal_dseparator(X, Y)
@@ -513,7 +930,7 @@ class CausalInference(object):
             :math:`P(X | do(Y), Z)`.
 
         evidence: dict (default: None)
-            Dictionary of the form {variable_name: variable_state} repesenting
+            Dictionary of the form {variable_name: variable_state} representing
             the conditional variables in the query i.e. `Z` in :math:`P(X |
             do(Y), Z)`.
 
@@ -527,7 +944,7 @@ class CausalInference(object):
             Propagation.
 
         kwargs: Any
-            Additional paramters which needs to be passed to inference
+            Additional parameters which needs to be passed to inference
             algorithms.  Please refer to the pgmpy.inference.Inference for
             details.
 
@@ -538,36 +955,38 @@ class CausalInference(object):
 
         Examples
         --------
-        >>> from pgmpy.utils import get_example_model
-        >>> model = get_example_model('alarm')
+        >>> from pgmpy.example_models import load_model
+        >>> model = load_model("bnlearn/alarm")
         >>> infer = CausalInference(model)
-        >>> infer.query(['HISTORY'], do={'CVP': 'LOW'}, evidence={'HR': 'LOW'})
-        <DiscreteFactor representing phi(HISTORY:2) at 0x7f4e0874c2e0>
+        >>> infer.query(["HISTORY"], do={"CVP": "LOW"}, evidence={"HR": "LOW"}) # doctest: +ELLIPSIS
+        <DiscreteFactor representing phi(HISTORY:2) at 0x...>
         """
         # Step 1: Check if all the arguments are valid and get them to uniform types.
         if (not isinstance(variables, Iterable)) or (isinstance(variables, str)):
-            raise ValueError(
-                f"variables much be a list (array-like). Got type: {type(variables)}."
-            )
+            raise ValueError(f"variables much be a list (array-like). Got type: {type(variables)}.")
         elif not all([node in self.model.nodes() for node in variables]):
-            raise ValueError(
-                f"Some of the variables in `variables` are not in the model."
-            )
+            raise ValueError("Some of the variables in `variables` are not in the model.")
         else:
             variables = list(variables)
 
         if do is None:
             do = {}
         elif not isinstance(do, dict):
-            raise ValueError(
-                "`do` must be a dict of the form: {variable_name: variable_state}"
-            )
+            raise ValueError("`do` must be a dict of the form: {variable_name: variable_state}")
         if evidence is None:
             evidence = {}
         elif not isinstance(evidence, dict):
-            raise ValueError(
-                "`evidence` must be a dict of the form: {variable_name: variable_state}"
-            )
+            raise ValueError("`evidence` must be a dict of the form: {variable_name: variable_state}")
+
+        if do:
+            for var, do_var in product(variables, do):
+                if do_var in nx.descendants(self.dag, var):
+                    raise ValueError(
+                        f"Invalid causal query: There is a direct edge from the query variable"
+                        f" '{var}' to the intervention variable '{do_var}'. "
+                        f"In causal inference, you can typically only query the effect on variables"
+                        f" that are descendants of the intervention."
+                    )
 
         from pgmpy.inference import Inference
 
@@ -581,19 +1000,16 @@ class CausalInference(object):
             inference_algo = BeliefPropagation
         elif not isinstance(inference_algo, Inference):
             raise ValueError(
-                f"inference_algo must be one of: 've', 'bp', or an instance of pgmpy.inference.Inference. Got: {inference_algo}"
+                f"inference_algo must be one of: 've', 'bp', or an "
+                f"instance of pgmpy.inference.Inference. Got: {inference_algo}"
             )
 
         # Step 2: Check if adjustment set is provided, otherwise try calculating it.
         if adjustment_set is None:
             do_vars = [var for var, state in do.items()]
-            adjustment_set = set(
-                chain(*[self.model.predecessors(var) for var in do_vars])
-            )
+            adjustment_set = self.model.get_parents(do_vars)
             if len(adjustment_set.intersection(self.model.latents)) != 0:
-                raise ValueError(
-                    "Not all parents of do variables are observed. Please specify an adjustment set."
-                )
+                raise ValueError("Not all parents of do variables are observed. Please specify an adjustment set.")
 
         infer = inference_algo(self.model)
 
@@ -613,9 +1029,7 @@ class CausalInference(object):
         # For computing p_z, if evidence variables also in adjustment set,
         # manually do reduce else inference will throw error.
         evidence_adj_inter = {
-            var: state
-            for var, state in evidence.items()
-            if var in adjustment_set.intersection(evidence.keys())
+            var: state for var, state in evidence.items() if var in adjustment_set.intersection(evidence.keys())
         }
         if len(evidence_adj_inter) != 0:
             p_z = infer.query(adjustment_set, show_progress=False).reduce(
@@ -651,13 +1065,10 @@ class CausalInference(object):
             pbar = tqdm(total=np.prod([len(states) for states in adj_states]))
 
         for state_comb in product(*adj_states):
-            adj_evidence = {
-                var: state for var, state in zip(adjustment_set, state_comb)
-            }
+            adj_evidence = {var: state for var, state in zip(adjustment_set, state_comb)}
             evidence = {**do, **adj_evidence}
             values.append(
-                infer.query(variables, evidence=evidence, show_progress=False)
-                * p_z.get_value(**adj_evidence)
+                infer.query(variables, evidence=evidence, show_progress=False) * p_z.get_value(**adj_evidence)
             )
 
             if show_progress and config.SHOW_PROGRESS:

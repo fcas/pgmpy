@@ -4,9 +4,8 @@ import numpy as np
 import numpy.testing as np_test
 
 from pgmpy.factors.discrete import DiscreteFactor, TabularCPD
-from pgmpy.models import BayesianNetwork
-from pgmpy.inference import Inference
-from pgmpy.inference import VariableElimination
+from pgmpy.inference import Inference, VariableElimination
+from pgmpy.models import DiscreteBayesianNetwork
 
 
 class TestStateNameInit(unittest.TestCase):
@@ -26,9 +25,7 @@ class TestStateNameInit(unittest.TestCase):
         self.sn1_no_names = {"speed": [0, 1, 2], "switch": [0, 1], "time": [0, 1]}
 
         self.phi1 = DiscreteFactor(["speed", "switch", "time"], [3, 2, 2], np.ones(12))
-        self.phi2 = DiscreteFactor(
-            ["speed", "switch", "time"], [3, 2, 2], np.ones(12), state_names=self.sn1
-        )
+        self.phi2 = DiscreteFactor(["speed", "switch", "time"], [3, 2, 2], np.ones(12), state_names=self.sn1)
 
         self.cpd1 = TabularCPD(
             "grade",
@@ -54,7 +51,7 @@ class TestStateNameInit(unittest.TestCase):
             state_names=self.sn2,
         )
 
-        student = BayesianNetwork([("diff", "grade"), ("intel", "grade")])
+        student = DiscreteBayesianNetwork([("diff", "grade"), ("intel", "grade")])
         diff_cpd = TabularCPD("diff", 2, [[0.2], [0.8]])
         intel_cpd = TabularCPD("intel", 2, [[0.3], [0.7]])
         grade_cpd = TabularCPD(
@@ -91,9 +88,7 @@ class StateNameDecorator(unittest.TestCase):
         }
 
         self.phi1 = DiscreteFactor(["speed", "switch", "time"], [3, 2, 2], np.ones(12))
-        self.phi2 = DiscreteFactor(
-            ["speed", "switch", "time"], [3, 2, 2], np.ones(12), state_names=self.sn1
-        )
+        self.phi2 = DiscreteFactor(["speed", "switch", "time"], [3, 2, 2], np.ones(12), state_names=self.sn1)
 
         self.cpd1 = TabularCPD(
             "grade",
@@ -119,8 +114,8 @@ class StateNameDecorator(unittest.TestCase):
             state_names=self.sn2,
         )
 
-        student = BayesianNetwork([("diff", "grade"), ("intel", "grade")])
-        student_state_names = BayesianNetwork([("diff", "grade"), ("intel", "grade")])
+        student = DiscreteBayesianNetwork([("diff", "grade"), ("intel", "grade")])
+        student_state_names = DiscreteBayesianNetwork([("diff", "grade"), ("intel", "grade")])
 
         diff_cpd = TabularCPD("diff", 2, [[0.2], [0.8]])
         intel_cpd = TabularCPD("intel", 2, [[0.3], [0.7]])
@@ -154,9 +149,7 @@ class StateNameDecorator(unittest.TestCase):
         )
 
         student.add_cpds(diff_cpd, intel_cpd, grade_cpd)
-        student_state_names.add_cpds(
-            diff_cpd_state_names, intel_cpd_state_names, grade_cpd_state_names
-        )
+        student_state_names.add_cpds(diff_cpd_state_names, intel_cpd_state_names, grade_cpd_state_names)
 
         self.model_no_state_names = VariableElimination(student)
         self.model_with_state_names = VariableElimination(student_state_names)
@@ -175,17 +168,13 @@ class StateNameDecorator(unittest.TestCase):
         self.assertEqual(self.phi2.assignment([1, 2]), req_op1)
 
     def test_factor_reduce_statename(self):
-        phi = DiscreteFactor(
-            ["speed", "switch", "time"], [3, 2, 2], np.ones(12), state_names=self.sn1
-        )
+        phi = DiscreteFactor(["speed", "switch", "time"], [3, 2, 2], np.ones(12), state_names=self.sn1)
         phi.reduce([("speed", "medium"), ("time", "day")])
         self.assertEqual(phi.variables, ["switch"])
         self.assertEqual(phi.cardinality, [2])
         np_test.assert_array_equal(phi.values, np.array([1, 1]))
 
-        phi = DiscreteFactor(
-            ["speed", "switch", "time"], [3, 2, 2], np.ones(12), state_names=self.sn1
-        )
+        phi = DiscreteFactor(["speed", "switch", "time"], [3, 2, 2], np.ones(12), state_names=self.sn1)
         phi = phi.reduce([("speed", "medium"), ("time", "day")], inplace=False)
         self.assertEqual(phi.variables, ["switch"])
         self.assertEqual(phi.cardinality, [2])
@@ -283,9 +272,7 @@ class StateNameDecorator(unittest.TestCase):
         )
 
     def test_inference_query_statename(self):
-        inf_op1 = self.model_with_state_names.query(
-            ["grade"], evidence={"intel": "poor"}
-        )
+        inf_op1 = self.model_with_state_names.query(["grade"], evidence={"intel": "poor"})
         inf_op2 = self.model_no_state_names.query(["grade"], evidence={"intel": 0})
         req_op = DiscreteFactor(
             ["grade"],
@@ -296,12 +283,43 @@ class StateNameDecorator(unittest.TestCase):
         self.assertEqual(inf_op1, req_op)
         self.assertEqual(inf_op1, req_op)
 
-        inf_op1 = self.model_with_state_names.map_query(
-            ["grade"], evidence={"intel": "poor"}
-        )
+        inf_op1 = self.model_with_state_names.map_query(["grade"], evidence={"intel": "poor"})
         inf_op2 = self.model_no_state_names.map_query(["grade"], evidence={"intel": 0})
         req_op1 = {"grade": "F"}
         req_op2 = {"grade": 2}
 
         self.assertEqual(inf_op1, req_op1)
         self.assertEqual(inf_op2, req_op2)
+
+    def test_add_state_names(self):
+        # Test string state names taking precedence over numeric ones
+        numeric_states = DiscreteFactor(["speed"], [3], np.ones(3), state_names={"speed": [0, 1, 2]})
+        string_states = DiscreteFactor(["speed"], [3], np.ones(3), state_names={"speed": ["low", "medium", "high"]})
+
+        # Make a copy to test in both directions
+        numeric_states_copy = DiscreteFactor(["speed"], [3], np.ones(3), state_names={"speed": [0, 1, 2]})
+
+        # String states should take precedence
+        numeric_states.add_state_names(string_states)
+        self.assertEqual(numeric_states.state_names["speed"], ["low", "medium", "high"])
+
+        # Test the opposite direction - string states should still take precedence
+        string_states.add_state_names(numeric_states_copy)
+        self.assertEqual(string_states.state_names["speed"], ["low", "medium", "high"])
+
+        # Test conflicting string state names
+        states1 = DiscreteFactor(["switch"], [2], np.ones(2), state_names={"switch": ["on", "off"]})
+        states2 = DiscreteFactor(["switch"], [2], np.ones(2), state_names={"switch": ["high", "low"]})
+
+        # Should raise a ValueError due to conflict
+        with self.assertRaises(ValueError):
+            states1.add_state_names(states2)
+
+        # Test merging non-conflicting state names for different variables
+        factor1 = DiscreteFactor(["speed"], [3], np.ones(3), state_names={"speed": ["low", "medium", "high"]})
+        factor2 = DiscreteFactor(["switch"], [2], np.ones(2), state_names={"switch": ["on", "off"]})
+
+        # Should merge without conflict
+        factor1.add_state_names(factor2)
+        self.assertEqual(factor1.state_names["speed"], ["low", "medium", "high"])
+        self.assertEqual(factor1.state_names["switch"], ["on", "off"])
